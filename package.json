@@ -4,12 +4,17 @@
   "description": "One OpenAI-compatible /v1 endpoint that routes across free-tier LLM providers with failover and per-key usage tracking.",
   "type": "module",
   "main": "src/index.js",
-  "bin": { "freellm": "src/cli.js" },
+  "bin": {
+    "freellm": "src/cli.js"
+  },
   "scripts": {
     "start": "node src/index.js",
     "cli": "node src/cli.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "setup": "node scripts/setup.js"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "license": "MIT"
 }

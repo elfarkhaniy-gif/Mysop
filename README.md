@@ -15,6 +15,10 @@ Built-in providers: Groq, Cerebras, Google Gemini, Mistral, OpenRouter (`:free` 
 
 ## Quick start
 
+Easiest: run `install.bat` (Windows) or `./install.sh` (Mac/Linux), then `start.bat` / `./start.sh`. The installer creates `.env` with random secrets and offers to add your first provider key. An Arabic guide is in [INSTALL_AR.md](INSTALL_AR.md).
+
+Manual setup:
+
 ```bash
 cp .env.example .env          # then set FREELLM_MASTER_KEY, FREELLM_ADMIN_TOKEN, FREELLM_API_KEYS
 echo "$GROQ_API_KEY"   | npm run -s cli -- keys add groq
