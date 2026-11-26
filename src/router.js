@@ -44,7 +44,7 @@ export class Router {
 
   /** Resolve the requested model name into an ordered list of candidates. */
   candidates(requested, type, estTokens = 0) {
-    const name = (requested ?? 'auto').trim();
+    const name = typeof requested === 'string' ? requested.trim() : 'auto';
     const providers = this.providers();
     let pool;
 
@@ -94,8 +94,14 @@ export class Router {
    * Send the request upstream with failover. Resolves with the first successful
    * upstream Response plus the candidate that served it and a usage handle.
    */
-  async dispatch(type, body) {
-    const est = estimateTokens(body);
+  async dispatch(type, body, { signal } = {}) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      throw new RouterError(400, 'Request body must be a JSON object');
+    }
+    if (body.model != null && typeof body.model !== 'string') {
+      throw new RouterError(400, '"model" must be a string');
+    }
+    const est = estimateTokens(body, type);
     const { candidates, skipped, matched } = this.candidates(body.model, type, est);
     if (!matched) throw new RouterError(404, `Unknown model "${body.model}". GET /v1/models lists what is available.`);
     if (!candidates.length) {
@@ -109,6 +115,11 @@ export class Router {
       const handle = this.usage.record(c.keyId, c.model.id, est);
       const payload = { ...body, model: c.model.id };
       if (payload.stream && type === 'chat') payload.stream_options ??= { include_usage: true };
+      // The timeout covers waiting for response headers only, so long streams
+      // aren't cut off; the client's signal aborts the upstream call at any time.
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(new DOMException('timeout', 'TimeoutError')), this.timeoutMs);
+      const upstreamSignal = signal ? AbortSignal.any([signal, ctrl.signal]) : ctrl.signal;
       let res;
       try {
         res = await this.fetch(c.baseUrl.replace(/\/$/, '') + ENDPOINTS[type], {
@@ -119,13 +130,20 @@ export class Router {
             ...c.headers,
           },
           body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(this.timeoutMs),
+          signal: upstreamSignal,
         });
       } catch (err) {
+        clearTimeout(timer);
+        if (signal?.aborted) {
+          handle.setTokens(0);
+          throw new RouterError(499, 'Client closed the request', attempts);
+        }
+        const timedOut = ctrl.signal.aborted;
         this.usage.cooldown(c.keyId, c.model.id, 30_000, 'network error');
-        attempts.push({ provider: c.provider, model: c.model.id, error: err.name === 'TimeoutError' ? 'timeout' : err.message });
+        attempts.push({ provider: c.provider, model: c.model.id, error: timedOut ? 'timeout' : err.message });
         continue;
       }
+      clearTimeout(timer);
 
       if (res.ok) return { res, candidate: c, usageHandle: handle, attempts };
 

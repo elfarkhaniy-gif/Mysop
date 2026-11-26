@@ -44,7 +44,7 @@ export function createApp({ store, clientKeys = [], adminToken = '', fetchImpl, 
       return json(res, 404, { error: 'Not found' });
     } catch (err) {
       if (err instanceof RouterError) {
-        if (res.headersSent) return res.end();
+        if (res.headersSent || err.status === 499) return res.end();
         return json(res, err.status, {
           error: {
             message: err.message,
@@ -68,7 +68,10 @@ export function createApp({ store, clientKeys = [], adminToken = '', fetchImpl, 
 
 async function proxy(req, res, router, type, log) {
   const body = await readJson(req);
-  const { res: up, candidate, usageHandle, attempts } = await router.dispatch(type, body);
+  // Abort the upstream call (and stop spending quota) if the client goes away.
+  const clientGone = new AbortController();
+  res.on('close', () => { if (!res.writableFinished) clientGone.abort(); });
+  const { res: up, candidate, usageHandle, attempts } = await router.dispatch(type, body, { signal: clientGone.signal });
 
   const headers = {
     'content-type': up.headers.get('content-type') ?? 'application/json',
@@ -87,6 +90,7 @@ async function proxy(req, res, router, type, log) {
     let completionChars = 0;
     let reported = null;
     for await (const chunk of up.body) {
+      if (clientGone.signal.aborted) break;
       res.write(chunk);
       buf += decoder.decode(chunk, { stream: true });
       let nl;
@@ -142,8 +146,9 @@ async function admin(req, res, url, store, router, usage) {
     if (m === 'GET' && !id) return json(res, 200, { data: store.listKeys() });
     if (m === 'POST' && !id) {
       const b = await readJson(req);
+      if (typeof b.key !== 'string' || !b.key.trim()) return json(res, 400, { error: '"key" (string) is required' });
       if (!router.providers()[b.provider]) return json(res, 400, { error: `Unknown provider "${b.provider}"` });
-      return json(res, 201, store.addKey({ provider: b.provider, apiKey: b.key, label: b.label }));
+      return json(res, 201, store.addKey({ provider: b.provider, apiKey: b.key.trim(), label: String(b.label ?? '') }));
     }
     if (m === 'PATCH' && id) {
       const k = store.updateKey(id, await readJson(req));
@@ -163,7 +168,8 @@ async function admin(req, res, url, store, router, usage) {
     if ((m === 'PUT' || m === 'POST') && id) {
       const b = await readJson(req);
       if (!/^[a-z0-9_-]+$/i.test(id)) return json(res, 400, { error: 'Provider id must be alphanumeric/-/_' });
-      if (!/^https?:\/\//.test(b.baseUrl ?? '')) return json(res, 400, { error: 'baseUrl must be an http(s) URL' });
+      if (typeof b.baseUrl !== 'string' || !/^https?:\/\//.test(b.baseUrl)) return json(res, 400, { error: 'baseUrl must be an http(s) URL' });
+      if (b.models != null && !Array.isArray(b.models)) return json(res, 400, { error: '"models" must be an array' });
       const models = (b.models ?? []).map((x) => ({
         id: String(x.id), type: x.type ?? 'chat', tier: Number(x.tier ?? 1),
         aliases: x.aliases ?? [], limits: x.limits ?? {},

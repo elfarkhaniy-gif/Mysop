@@ -110,9 +110,11 @@ function splitBucket(b) {
 }
 
 /** Cheap token estimate (~4 chars/token) for budgeting before the provider answers. */
-export function estimateTokens(body) {
+export function estimateTokens(body, type = 'chat') {
   const src = body.messages ?? body.input ?? body.prompt ?? '';
-  const chars = typeof src === 'string' ? src.length : JSON.stringify(src).length;
+  const chars = typeof src === 'string' ? src.length : (JSON.stringify(src) ?? '').length;
+  const prompt = Math.ceil(chars / 4);
+  if (type !== 'chat') return prompt; // embeddings/images/tts produce no completion tokens
   const out = Number(body.max_tokens ?? body.max_completion_tokens ?? 256);
-  return Math.ceil(chars / 4) + (Number.isFinite(out) ? Math.min(out, 4096) : 256);
+  return prompt + (Number.isFinite(out) && out >= 0 ? Math.min(out, 4096) : 256);
 }
